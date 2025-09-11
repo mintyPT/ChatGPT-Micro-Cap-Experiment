@@ -25,7 +25,7 @@ trade: activate
 	python trading_script.py $(ARGS)
 
 graph: activate
-	python "Start Your Own/Generate_Graph.py" $(ARGS) 
+	python "Start Your Own/Generate_Graph.py" $(ARGS)
 
 
 # Clean up virtual environment
