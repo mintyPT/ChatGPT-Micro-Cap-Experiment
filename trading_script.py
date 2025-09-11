@@ -66,6 +66,7 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 DATA_DIR = SCRIPT_DIR  # Save files alongside this script by default
 PORTFOLIO_CSV = DATA_DIR / "chatgpt_portfolio_update.csv"
 TRADE_LOG_CSV = DATA_DIR / "chatgpt_trade_log.csv"
+STARTING_AMOUNT_JSON = DATA_DIR / "starting_amount.json"
 DEFAULT_BENCHMARKS = ["IWO", "XBI", "SPY", "IWM"]
 
 # Set up logger for this module
@@ -79,6 +80,7 @@ def _log_initial_state():
     logger.info("Data directory: %s", DATA_DIR)
     logger.info("Portfolio CSV: %s", PORTFOLIO_CSV)
     logger.info("Trade log CSV: %s", TRADE_LOG_CSV)
+    logger.info("Starting amount JSON: %s", STARTING_AMOUNT_JSON)
     logger.info("Default benchmarks: %s", DEFAULT_BENCHMARKS)
     logger.info("==============================================")
 
@@ -86,7 +88,74 @@ def _log_initial_state():
 # Configuration helpers — benchmark tickers (tickers.json)
 # ------------------------------
 
+# ------------------------------
+# Starting amount configuration helpers
+# ------------------------------
 
+def save_starting_amount(amount: float) -> None:
+    """Save the starting amount to a JSON file in the data directory.
+    
+    Args:
+        amount: The starting cash amount as a float
+    """
+    try:
+        data = {"starting_amount": float(amount)}
+        logger.info("Saving starting amount to JSON file: %s", STARTING_AMOUNT_JSON)
+        with STARTING_AMOUNT_JSON.open("w", encoding="utf-8") as fh:
+            json.dump(data, fh, indent=2)
+        logger.info("Successfully saved starting amount: $%.2f", amount)
+    except Exception as exc:
+        logger.error("Failed to save starting amount to %s: %s", STARTING_AMOUNT_JSON, exc)
+        raise
+
+def load_starting_amount() -> Optional[float]:
+    """Load the starting amount from the JSON file.
+    
+    Returns:
+        The starting amount as a float, or None if file doesn't exist or is invalid
+    """
+    try:
+        logger.info("Loading starting amount from JSON file: %s", STARTING_AMOUNT_JSON)
+        with STARTING_AMOUNT_JSON.open("r", encoding="utf-8") as fh:
+            data = json.load(fh)
+            amount = data.get("starting_amount")
+            if amount is not None:
+                amount = float(amount)
+                logger.info("Successfully loaded starting amount: $%.2f", amount)
+                return amount
+            else:
+                logger.warning("Starting amount key not found in JSON file: %s", STARTING_AMOUNT_JSON)
+                return None
+    except FileNotFoundError:
+        logger.info("Starting amount JSON file not found: %s", STARTING_AMOUNT_JSON)
+        return None
+    except json.JSONDecodeError as exc:
+        logger.warning("Starting amount JSON file malformed: %s -> %s", STARTING_AMOUNT_JSON, exc)
+        return None
+    except Exception as exc:
+        logger.warning("Unable to load starting amount from %s: %s", STARTING_AMOUNT_JSON, exc)
+        return None
+
+def prompt_and_save_starting_amount() -> float:
+    """Prompt the user for starting amount and save it to JSON.
+    
+    Returns:
+        The starting amount as a float
+        
+    Raises:
+        ValueError: If user input cannot be converted to a valid float
+    """
+    try:
+        amount = float(input("What would you like your starting cash amount to be? "))
+        if amount <= 0:
+            raise ValueError("Starting amount must be positive")
+        save_starting_amount(amount)
+        return amount
+    except ValueError as exc:
+        logger.error("Invalid starting amount input: %s", exc)
+        raise ValueError(
+            "Cash could not be converted to float datatype or is not positive. Please enter a valid positive number."
+        )
 
 logger = logging.getLogger(__name__)
 
@@ -392,14 +461,15 @@ def download_price_data(ticker: str, **kwargs: Any) -> FetchResult:
 # ------------------------------
 
 def set_data_dir(data_dir: Path) -> None:
-    global DATA_DIR, PORTFOLIO_CSV, TRADE_LOG_CSV
+    global DATA_DIR, PORTFOLIO_CSV, TRADE_LOG_CSV, STARTING_AMOUNT_JSON
     logger.info("Setting data directory: %s", data_dir)
     DATA_DIR = Path(data_dir)
     logger.debug("Creating data directory if it doesn't exist: %s", DATA_DIR)
     os.makedirs(DATA_DIR, exist_ok=True)
     PORTFOLIO_CSV = DATA_DIR / "chatgpt_portfolio_update.csv"
     TRADE_LOG_CSV = DATA_DIR / "chatgpt_trade_log.csv"
-    logger.info("Data directory configured - Portfolio CSV: %s, Trade Log CSV: %s", PORTFOLIO_CSV, TRADE_LOG_CSV)
+    STARTING_AMOUNT_JSON = DATA_DIR / "starting_amount.json"
+    logger.info("Data directory configured - Portfolio CSV: %s, Trade Log CSV: %s, Starting Amount JSON: %s", PORTFOLIO_CSV, TRADE_LOG_CSV, STARTING_AMOUNT_JSON)
 
 
 # ------------------------------
@@ -1051,7 +1121,7 @@ def daily_results(chatgpt_portfolio: pd.DataFrame, cash: float) -> None:
                 corr = np.corrcoef(x, y)[0, 1]
                 r2 = float(corr ** 2)
 
-    # $X normalized S&P 500 over same window (asks user for initial equity)
+    # $X normalized S&P 500 over same window (uses saved starting amount)
     spx_norm_fetch = download_price_data(
         "^GSPC",
         start=equity_series.index.min(),
@@ -1060,15 +1130,15 @@ def daily_results(chatgpt_portfolio: pd.DataFrame, cash: float) -> None:
     )
     spx_norm = spx_norm_fetch.df
     spx_value = np.nan
-    starting_equity = np.nan  # Ensure starting_equity is always defined
-    if not spx_norm.empty:
+    starting_equity = load_starting_amount()  # Load from saved JSON file
+    if starting_equity is None:
+        starting_equity = np.nan
+        print("No saved starting amount found for S&P 500 comparison.")
+    
+    if not spx_norm.empty and not np.isnan(starting_equity):
         initial_price = float(spx_norm["Close"].iloc[0])
         price_now = float(spx_norm["Close"].iloc[-1])
-        try:
-            starting_equity = float(input("what was your starting equity? "))
-        except Exception:
-            print("Invalid input for starting equity. Defaulting to NaN.")
-        spx_value = (starting_equity / initial_price) * price_now if not np.isnan(starting_equity) else np.nan
+        spx_value = (starting_equity / initial_price) * price_now
 
     # -------- Pretty Printing --------
     print("\n" + "=" * 64)
@@ -1144,13 +1214,17 @@ def load_latest_portfolio_state() -> tuple[pd.DataFrame | list[dict[str, Any]], 
     logger.info("Successfully read CSV file: %s", PORTFOLIO_CSV)
     if df.empty:
         portfolio = pd.DataFrame(columns=["ticker", "shares", "stop_loss", "buy_price", "cost_basis"])
-        print("Portfolio CSV is empty. Returning set amount of cash for creating portfolio.")
-        try:
-            cash = float(input("What would you like your starting cash amount to be? "))
-        except ValueError:
-            raise ValueError(
-                "Cash could not be converted to float datatype. Please enter a valid number."
-            )
+        print("Portfolio CSV is empty. Loading starting cash amount from saved configuration.")
+        
+        # Try to load saved starting amount first
+        cash = load_starting_amount()
+        if cash is None:
+            # If no saved amount, prompt user and save it
+            print("No saved starting amount found. Please enter your starting cash amount.")
+            cash = prompt_and_save_starting_amount()
+        else:
+            print(f"Using saved starting cash amount: ${cash:,.2f}")
+            
         return portfolio, cash
 
     non_total = df[df["Ticker"] != "TOTAL"].copy()
