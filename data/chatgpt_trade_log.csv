@@ -1,1 +1,4 @@
-Date,Ticker,Shares Bought,Buy Price,Cost Basis,PnL,Reason,Shares Sold,Sell Price
+Date,Ticker,Shares Bought,Buy Price,Cost Basis,PnL,Reason
+2025-09-12,FBIO,11.0,3.81,41.91,0.0,MANUAL BUY MOO - Filled
+2025-09-12,KALA,1.0,17.0,17.0,0.0,MANUAL BUY MOO - Filled
+2025-09-12,KAPA,12.0,1.8,21.6,0.0,MANUAL BUY MOO - Filled
